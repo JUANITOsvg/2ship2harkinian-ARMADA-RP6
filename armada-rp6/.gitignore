@@ -1,0 +1,7 @@
+# never commit Nintendo data or personal files
+*.z64
+*.n64
+*.v64
+*.o2r
+*.otr
+saves/
