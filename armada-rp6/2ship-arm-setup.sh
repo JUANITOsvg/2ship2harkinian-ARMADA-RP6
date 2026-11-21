@@ -69,6 +69,12 @@ mkdir -p "$BASE" "$GAME_DIR"
 touch "$GAME_DIR/.write-test" 2>/dev/null && rm -f "$GAME_DIR/.write-test" \
   || die "Can't write to $GAME_DIR. Check the card isn't read-only."
 echo "$CHANNEL" > "$BASE/channel"
+# Install the local fixes shipped next to this script (applied by update.sh on every build)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if compgen -G "$SCRIPT_DIR/patches/*.patch" >/dev/null; then
+  mkdir -p "$BASE/patches" && cp -f "$SCRIPT_DIR"/patches/*.patch "$BASE/patches/"
+  echo "Installed patches: $(cd "$SCRIPT_DIR/patches" && ls *.patch | tr '\n' ' ')"
+fi
 echo "$GAME_DIR" > "$BASE/gamedir"
 FSTYPE="$(findmnt -no FSTYPE -T "$GAME_DIR" 2>/dev/null || echo unknown)"
 echo "Game folder: $GAME_DIR (filesystem: $FSTYPE)"
@@ -179,15 +185,33 @@ git checkout --force --detach "$TARGET"
 git submodule sync --recursive
 git submodule update --init --recursive --force
 
+# Local fixes on top of upstream (e.g. PR #1745: 64-bit audio crashes / broken SFX).
+# The checkout above resets the tree, so each patch is applied fresh on every build.
+for p in "$BASE"/patches/*.patch; do
+  [[ -e "$p" ]] || continue
+  if git apply --check "$p" 2>/dev/null; then
+    git apply "$p"; log "Applied patch: $(basename "$p")"
+  elif git apply --reverse --check "$p" 2>/dev/null; then
+    log "Patch already included upstream, skipping: $(basename "$p")"
+  else
+    log "PATCH DOES NOT APPLY: $(basename "$p"). Upstream changed; check if it was merged or needs updating."
+    log "Nothing was built; the installed version was left untouched."
+    notify "2Ship update stopped" "A local patch no longer applies. See ~/2ship/update.log."
+    exit 1
+  fi
+done
+
 # A new release can change CMake options; start the cache clean on version change
 [[ "$WANT" != "$HAVE" ]] && rm -rf "$BUILD"
 
 log "Configuring"
-# Clang + signed char matches upstream's tested ARM64 build (macOS); GCC 16 builds crashed in audio code
-CFLAGS_EXTRA="-fsigned-char -fno-strict-aliasing"
+# Clang + signed char like upstream's macOS ARM64 build (not the crash fix itself; see patches/)
+# PIE matches upstream's Linux CI layout (Ubuntu builds PIE by default; Fedora's default here was non-PIE)
+CFLAGS_EXTRA="-fsigned-char -fno-strict-aliasing -fPIE"
 cmake -H. -B"$BUILD" -GNinja -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
-  -DCMAKE_C_FLAGS="$CFLAGS_EXTRA" -DCMAKE_CXX_FLAGS="$CFLAGS_EXTRA"
+  -DCMAKE_C_FLAGS="$CFLAGS_EXTRA" -DCMAKE_CXX_FLAGS="$CFLAGS_EXTRA" \
+  -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DCMAKE_EXE_LINKER_FLAGS="-pie"
 
 log "Generating 2ship.o2r"
 nice -n 10 cmake --build "$BUILD" --target Generate2ShipOtr -j"$JOBS"
@@ -238,7 +262,19 @@ cat > "$GAME_DIR/2ship.sh" <<'LAUNCH'
 #!/usr/bin/env bash
 # Steam launcher for 2Ship2Harkinian. Saves and settings live in this folder.
 cd "$(dirname "$(readlink -f "$0")")"
-exec ./2s2h.elf "$@"
+# 2s2h 5.0.1 can hang while shutting down after a TERM/INT signal (e.g. Steam's "Exit game").
+# Forward the signal, give it 3 s to exit cleanly, then force it. Saves are written when made,
+# so nothing is lost by forcing the exit.
+./2s2h.elf "$@" &
+GAME=$!
+stop_game() {
+  kill -TERM "$GAME" 2>/dev/null
+  for _ in 1 2 3 4 5 6; do kill -0 "$GAME" 2>/dev/null || exit 0; sleep 0.5; done
+  kill -KILL "$GAME" 2>/dev/null
+  exit 0
+}
+trap stop_game TERM INT HUP
+wait "$GAME"
 LAUNCH
 chmod +x "$GAME_DIR/2ship.sh" 2>/dev/null || true
 

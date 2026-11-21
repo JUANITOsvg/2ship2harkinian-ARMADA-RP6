@@ -5,7 +5,12 @@ This branch is the upstream [2Ship2Harkinian](https://github.com/2ship2harkinian
 builds the game natively for ARM64 on [Armada OS](https://github.com/armada-os) (Fedora 44 based,
 rpm-ostree, SteamOS-style), sets up manual updates, and makes a Steam-ready launcher.
 
-**No game code is changed.** Everything below is a build-time fix.
+The game code is changed in exactly one place: [`patches/0001-pr1745-64bit-audio-fixes.patch`](patches/),
+a 5.0.1 backport of the open upstream
+[PR #1745](https://github.com/2ship2harkinian/2ship2harkinian/pull/1745) by **billsix**.
+Without it the game has broken audio and crashes on this platform (see below). `update.sh`
+applies it on every build. It skips the patch if upstream has merged it, and it stops
+without building if the patch no longer applies.
 
 > This repository contains **no Nintendo assets**. You need your own legally dumped
 > *Majora's Mask* ROM (`.z64`). Never commit ROMs, `mm.o2r`, or saves.
@@ -55,7 +60,27 @@ There is deliberately no timer or cron job.
 | `mesa-libGL-devel` conflicts with Armada's patched Mesa, so rpm-ostree can't resolve it | Use `libglvnd-devel`, which provides the real `GL/gl.h` and `libGL.so`. `mesa-libGL-devel` only ships DRI internals |
 | `SDL2-devel` and `nlohmann-json-devel` were renamed | `sdl2-compat-devel` and `json-devel` |
 | The first launch fails with *"Extractor assets not found … Missing 'assets/' folder"* | The build creates `build-cmake/mm/assets`, but nothing installs it. The updater now copies it to the game folder |
-| The GCC 16 build had distorted audio and crashed in `AudioSfx_ChooseActiveSfx` (SIGSEGV) | Build with **Clang** and `-fsigned-char -fno-strict-aliasing`. This matches the ARM64 configuration upstream tests (macOS: Clang, signed `char`) |
+| Distorted or silent sound effects, then a SIGSEGV in `AudioSfx_ChooseActiveSfx` or `AudioSfx_SetProperties` after about 40 s (title demo, South Clock Town) | **Real cause:** Fedora's toolchain built a **non-PIE** executable, and 5.0.1 has 64-bit audio bugs. A port guard (`parentLayer < 0x7FFFFFFF`) skips every note update when the audio heap sits below 2 GB. An uninitialised `AdpcmLoop.sampleEnd` overflows the software-RSP buffer. `osRecvMesg` writes 8 bytes into 4-byte locals. **Fix:** the PR #1745 patch, plus building as **PIE** like upstream's Ubuntu CI. Switching to Clang alone did *not* fix it |
+| After a TERM signal (Steam's "Exit game"), 5.0.1 can hang while shutting down | The launcher passes the signal on and force-quits after 3 s. Saves are written when made, so nothing is lost |
+
+ARM64 Linux in general is fine upstream. The open [PR #1970](https://github.com/2ship2harkinian/2ship2harkinian/pull/1970)
+adds an aarch64 Linux CI build (PIE, Ubuntu), tested on Switch Linux.
+
+## Recommended in-game settings (Game Mode, plug-and-play)
+
+Open the menu with **Select/Back** once *Settings → Controller navigation* is on. Before that, use F1 in Desktop Mode.
+
+| Setting | Value | Why |
+|---|---|---|
+| Fullscreen | on | Without it, Game Mode scales a non-16:9 window, so the picture is stretched or has bars |
+| Interpolation FPS | 60 | Smooth 60 fps (game logic stays at its authentic 20 Hz). Uses about 35 % of one core and the GPU stays at its lowest clock, so the fan stays at minimum in *Balanced* |
+| Disable Black Bar Letterboxes | on | Edge-to-edge 16:9 in cutscenes |
+| Widescreen Actor Culling | on | No pop-in at the 16:9 edges |
+| Autosave | on, every 1 min | There is no save-on-exit, so this keeps losses to about a minute |
+| Persistent Owl Saves | on | Loading doesn't delete the autosave |
+| Pause Menu Save | on | B in the pause menu saves |
+
+Controller mapping is created automatically. Steam Input presents the RP6 as an Xbox pad.
 
 ## Files the script creates
 
@@ -65,7 +90,8 @@ There is deliberately no timer or cron job.
 | `~/2ship/update.sh` | fetch → build → install (manual) |
 | `~/2ship/update.log` | build log |
 | `~/2ship/save-backups/` | automatic save/settings backups |
-| `<game-dir>/2ship.sh` | launcher (`cd` into the folder and run `2s2h.elf`) |
+| `~/2ship/patches/` | local source patches (copied from `armada-rp6/patches/`) |
+| `<game-dir>/2ship.sh` | launcher (runs `2s2h.elf` from its folder; force-quits a hung exit) |
 | `<game-dir>/2s2h.elf`, `2ship.o2r`, `assets/` | the build |
 
-Built on a Retroid Pocket 6 (Snapdragon 8 Gen 2, Armada OS, Fedora 44, Clang 22).
+Built and tested on a Retroid Pocket 6 (Snapdragon 8 Gen 2, Armada OS, Fedora 44, Clang 22, PIE + PR #1745).
