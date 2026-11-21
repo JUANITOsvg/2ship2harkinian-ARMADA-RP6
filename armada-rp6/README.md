@@ -1,5 +1,7 @@
 # 2Ship2Harkinian — native ARM64 build for Armada OS (Retroid Pocket 6)
 
+> **Unofficial community build.** Not affiliated with Armada OS or the HarbourMasters 2Ship team.
+
 This branch is the upstream [2Ship2Harkinian](https://github.com/2ship2harkinian/2ship2harkinian)
 **5.0.1** release with one addition: this `armada-rp6/` folder. It holds a script that
 builds the game natively for ARM64 on [Armada OS](https://github.com/armada-os) (Fedora 44 based,
