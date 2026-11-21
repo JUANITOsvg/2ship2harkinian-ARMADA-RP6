@@ -238,6 +238,18 @@ mkdir -p "$GAME_DIR"
 # plain cp + chmod (|| true) so exFAT/FAT cards, which ignore permissions, also work
 cp -f "$ELF" "$GAME_DIR/2s2h.elf.new" && mv -f "$GAME_DIR/2s2h.elf.new" "$GAME_DIR/2s2h.elf"
 chmod 755 "$GAME_DIR/2s2h.elf" 2>/dev/null || true
+# Bundle the libraries whose file names change between versions, so an OS update can't
+# break the game (the launcher puts $GAME_DIR/lib first). Old copies are kept for --rollback.
+bundle_libs() {
+  mkdir -p "$GAME_DIR/lib"
+  local soname path
+  for soname in $(readelf -d "$GAME_DIR/2s2h.elf" | awk '/NEEDED/{gsub(/[][]/,"",$5); print $5}' \
+                  | grep -E '^lib(spdlog|fmt|tinyxml2)\.so'); do
+    path="$(ldd "$GAME_DIR/2s2h.elf" | awk -v l="$soname" '$1==l{print $3}')"
+    [[ -n "$path" && -f "$path" ]] && cp -fL "$path" "$GAME_DIR/lib/$soname" && log "Bundled $soname"
+  done
+}
+bundle_libs
 cp -f "$O2R" "$GAME_DIR/2ship.o2r"
 # extractor XMLs/configs needed on first launch to build mm.o2r from the ROM
 ASSETS="$(dirname "$ELF")/assets"
@@ -262,6 +274,8 @@ cat > "$GAME_DIR/2ship.sh" <<'LAUNCH'
 #!/usr/bin/env bash
 # Steam launcher for 2Ship2Harkinian. Saves and settings live in this folder.
 cd "$(dirname "$(readlink -f "$0")")"
+# Use the bundled copies of version-sensitive libraries first (see update.sh: bundle_libs)
+export LD_LIBRARY_PATH="$PWD/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 # 2s2h 5.0.1 can hang while shutting down after a TERM/INT signal (e.g. Steam's "Exit game").
 # Forward the signal, give it 3 s to exit cleanly, then force it. Saves are written when made,
 # so nothing is lost by forcing the exit.

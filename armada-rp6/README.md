@@ -62,6 +62,7 @@ There is deliberately no timer or cron job.
 | The first launch fails with *"Extractor assets not found … Missing 'assets/' folder"* | The build creates `build-cmake/mm/assets`, but nothing installs it. The updater now copies it to the game folder |
 | Distorted or silent sound effects, then a SIGSEGV in `AudioSfx_ChooseActiveSfx` or `AudioSfx_SetProperties` after about 40 s (title demo, South Clock Town) | **Real cause:** Fedora's toolchain built a **non-PIE** executable, and 5.0.1 has 64-bit audio bugs. A port guard (`parentLayer < 0x7FFFFFFF`) skips every note update when the audio heap sits below 2 GB. An uninitialised `AdpcmLoop.sampleEnd` overflows the software-RSP buffer. `osRecvMesg` writes 8 bytes into 4-byte locals. **Fix:** the PR #1745 patch, plus building as **PIE** like upstream's Ubuntu CI. Switching to Clang alone did *not* fix it |
 | After a TERM signal (Steam's "Exit game"), 5.0.1 can hang while shutting down | The launcher passes the signal on and force-quits after 3 s. Saves are written when made, so nothing is lost |
+| An Armada/Fedora update can ship a newer spdlog, fmt or tinyxml2. Their sonames change (`libspdlog.so.1.15`, `libfmt.so.11`, `libtinyxml2.so.11`), so the game would no longer start | The updater copies these three libraries into `<game-dir>/lib/` on every install, and the launcher puts that folder first in `LD_LIBRARY_PATH`. They only need `libstdc++`. Everything else (glibc, GL, SDL2, zlib, …) stays the system's |
 
 ARM64 Linux in general is fine upstream. The open [PR #1970](https://github.com/2ship2harkinian/2ship2harkinian/pull/1970)
 adds an aarch64 Linux CI build (PIE, Ubuntu), tested on Switch Linux.
@@ -93,5 +94,6 @@ Controller mapping is created automatically. Steam Input presents the RP6 as an 
 | `~/2ship/patches/` | local source patches (copied from `armada-rp6/patches/`) |
 | `<game-dir>/2ship.sh` | launcher (runs `2s2h.elf` from its folder; force-quits a hung exit) |
 | `<game-dir>/2s2h.elf`, `2ship.o2r`, `assets/` | the build |
+| `<game-dir>/lib/` | bundled spdlog/fmt/tinyxml2, so OS updates can't break the game |
 
 Built and tested on a Retroid Pocket 6 (Snapdragon 8 Gen 2, Armada OS, Fedora 44, Clang 22, PIE + PR #1745).
